@@ -25,15 +25,31 @@ app.config["SQLALCHEMY_DATABASE_URI"] = db_uri
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app) #db object
 
-@app.get("/api/home") #route to homepage
+#As a user I want to view top 5 rented films of all time
+@app.get("/api/films/top5") #route to homepage
 def top5_films(): #function for getting the top 5 films, used query written for milestone 1 question 6
     sql = text("""
         SELECT f.film_id, f.title, COUNT(r.rental_id) AS rentals_count
         FROM film f
         JOIN inventory i ON i.film_id = f.film_id
-        JOIN rental   r ON r.inventory_id = i.inventory_id
+        JOIN rental r ON r.inventory_id = i.inventory_id
         GROUP BY f.film_id, f.title
         ORDER BY rentals_count DESC
+        LIMIT 5;
+    """)
+    with db.engine.connect() as conn: #connecting to the db
+        rows = conn.execute(sql).mappings().all() #executing the query
+    return jsonify([dict(r) for r in rows]) #getting the rows and putting them into a dictionary
+
+#As a user I want to be able to view top 5 actors that are part of films I have in the store
+@app.get("/api/actors/top5")
+def top5_actors():
+    sql = text("""
+        SELECT a.actor_id, CONCAT(a.first_name, ' ', a.last_name) AS name, COUNT(DISTINCT fa.film_id) AS films_count
+        FROM actor a
+        JOIN film_actor fa ON fa.actor_id = a.actor_id
+        GROUP BY a.actor_id, name
+        ORDER BY films_count DESC, name ASC
         LIMIT 5;
     """)
     with db.engine.connect() as conn: #connecting to the db
