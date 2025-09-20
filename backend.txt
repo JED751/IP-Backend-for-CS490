@@ -1,1 +1,4 @@
-backend2
+activate and deactivate backend process:
+.\venv\Scripts\Activate
+python app.py
+deactivate
