@@ -188,5 +188,5 @@ def films_search(): #function for searching for a film
         "items": [dict(r) for r in rows]
     })
 
-if __name__ == "__main__":
+if __name__ == "__main__": #git syndergy with frontend
     app.run(host="127.0.0.1", port=5000, debug=True) #running and restarting the server if changes are made on port 127.0.0.1
