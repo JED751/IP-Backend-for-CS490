@@ -1,9 +1,10 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_sqlalchemy import SQLAlchemy #lets use use the MySQL db
 from sqlalchemy import text #allows for SQL queries
 from flask_cors import CORS #lets us communicate with react
 from dotenv import load_dotenv, find_dotenv #for env file used to run backend
 import os #used to read env variables
+from math import ceil #math ceiling function
 
 load_dotenv(find_dotenv()) #connection to mySQL db in env
 
@@ -117,6 +118,75 @@ def actor_details(actor_id): #function for getting an actor's information
     data = dict(info) #getting the rows and putting them into a dictionary
     data["top_films"] = [dict(r) for r in top_films] #adding the top films to the dictionary as well
     return jsonify(data) #converting the data found into JSON format
+
+#As a user I want to be able to search a film by name of film, name of an actor, or genre of the film
+@app.get("/api/films/search") #endpoint for searching for films
+def films_search(): #function for searching for a film
+
+    title = request.args.get("title", "", type = str).strip() #getting title from URL, blank if not found
+    actor = request.args.get("actor", "", type = str).strip() #getting actor from URL, blank if not found
+    genre = request.args.get("genre", "", type = str).strip() #getting genre from URL, blank if not found
+
+    #pagination
+    page = max(request.args.get("page", 1, type = int), 1) #ensuring page is not out of bounds
+    page_size = min(max(request.args.get("pageSize", 20, type = int), 1), 50) #20 movies at a time per page
+
+    where = [] #array of SQL conditions
+    sql_params = {} #used for parameters within SQL queries
+
+    if title: #if a title is found
+        where.append("f.title LIKE :title")
+        sql_params["title"] = f"%{title}%" #parameter for SQL, partial matching allowed
+
+    if actor: #if an actor is found
+        #connecting actor to film_actor for searching
+        where.append("""
+            EXISTS (
+            SELECT 1
+            FROM film_actor AS fa
+            JOIN actor AS a ON a.actor_id = fa.actor_id
+            WHERE fa.film_id = f.film_id
+            AND CONCAT(a.first_name, ' ', a.last_name) LIKE :actor)
+        """)
+        sql_params["actor"] = f"%{actor}%" #parameter for SQL, partial matching allowed
+
+    if genre: #if a genre is found
+        #searching if a film matches the current genre
+        where.append("""
+            EXISTS (
+            SELECT 1
+            FROM film_category AS fc
+            JOIN category AS c ON c.category_id = fc.category_id
+            WHERE fc.film_id = f.film_id
+            AND c.name LIKE :genre)
+        """)
+        sql_params["genre"] = f"%{genre}%" #parameter for SQL, partial matching allowed
+
+    where_sql = "WHERE " + " AND ".join(where) if where else "" #combining all search features from user if present
+    count = text(f"SELECT COUNT(*) FROM film f {where_sql}") #amount of rows returned from search
+
+    #query to get films with parameters from user, uses offset to show different pages of films
+    film_sql = text(f"""
+        SELECT f.film_id, f.title, f.release_year, f.rating, f.length, GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ', ') AS categories
+        FROM film AS f
+        LEFT JOIN film_category AS fc ON fc.film_id = f.film_id
+        LEFT JOIN category AS c ON c.category_id = fc.category_id
+        {where_sql}
+        GROUP BY f.film_id, f.title, f.release_year, f.rating, f.length
+        ORDER BY f.film_id ASC
+        LIMIT :limit OFFSET :offset
+    """)
+    with db.engine.connect() as conn: #connecting to the db
+        total = conn.execute(count, sql_params).scalar() #getting number of results
+        rows = conn.execute(film_sql, {**sql_params, "limit": page_size, "offset": (page - 1) * page_size}).mappings().all() #displaying a reasonable number of rows
+
+    return jsonify({ #JSON response for frontend to read
+        "total": total,
+        "totalPages": ceil(total/page_size), #need a whole number so use ceiling
+        "page": page,
+        "pageSize": page_size,
+        "items": [dict(r) for r in rows]
+    })
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True) #running and restarting the server if changes are made on port 127.0.0.1
