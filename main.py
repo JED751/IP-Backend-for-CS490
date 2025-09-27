@@ -29,6 +29,7 @@ db = SQLAlchemy(app) #db object
 #As a user I want to view top 5 rented films of all time
 @app.get("/api/films/top5") #route to homepage
 def top5_films(): #function for getting the top 5 films
+
     sql = text("""
         SELECT f.film_id, f.title, COUNT(r.rental_id) AS rentals_count
         FROM film AS f
@@ -45,6 +46,7 @@ def top5_films(): #function for getting the top 5 films
 #As a user I want to be able to view top 5 actors that are part of films I have in the store
 @app.get("/api/actors/top5")
 def top5_actors(): #function for getting the top 5 actors based on movie count
+
     sql = text("""                     
         SELECT a.actor_id, CONCAT(a.first_name, ' ', a.last_name) AS name, COUNT(DISTINCT fa.film_id) AS films_count
         FROM actor AS a
@@ -60,6 +62,7 @@ def top5_actors(): #function for getting the top 5 actors based on movie count
 #As a user I want to be able to click on any of the top 5 films and view its details
 @app.get("/api/films/<int:film_id>") #using the end of the URL as the film's ID
 def film_details(film_id): #function for getting a film's information
+
     sql = text("""
         -- getting film information
         SELECT f.film_id AS id, f.title, f.description, f.release_year, GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ', ') AS categories,
@@ -94,6 +97,7 @@ def film_details(film_id): #function for getting a film's information
 #As a user I want to be able to view the actor’s details and view their top 5 rented films
 @app.get("/api/actors/<int:actor_id>") #using the end of the URL as the actor's ID
 def actor_details(actor_id): #function for getting an actor's information
+
     info_sql = text("""  
         SELECT a.actor_id, CONCAT(a.first_name, ' ', a.last_name) AS name, COUNT(DISTINCT fa.film_id) AS films_count
         FROM actor AS a
@@ -188,5 +192,40 @@ def films_search(): #function for searching for a film
         "items": [dict(r) for r in rows]
     })
 
-if __name__ == "__main__": #git syndergy with frontend
+#As a user I want to view a list of all customers (Pref. using pagination)
+@app.get("/api/customers") #endpoint for customer page
+def customers_list(): #function for returning customers
+
+    #pagination
+    page = max(request.args.get("page", 1, type = int), 1) #ensuring page is not out of bounds
+    page_size = min(max(request.args.get("pageSize", 20, type = int), 1), 50) #20 customers at a time per page
+
+    count = text("SELECT COUNT(*) FROM customer") #amount of rows returned from search
+
+    #customer information
+    sql = text("""
+        SELECT c.customer_id, c.store_id, c.first_name, c.last_name, c.email, c.active, c.create_date, a.address, a.address2, a.district, ci.city, co.country,
+        (SELECT COUNT(*) FROM rental AS r WHERE r.customer_id = c.customer_id) AS total_rentals,
+        (SELECT COUNT(*) FROM rental AS r WHERE r.customer_id = c.customer_id AND r.return_date IS NULL) AS current_rentals,
+        (SELECT MAX(rental_date) FROM rental AS r WHERE r.customer_id = c.customer_id) AS last_rental_date
+        FROM customer AS c
+        JOIN address AS a ON a.address_id = c.address_id
+        JOIN city AS ci ON ci.city_id = a.city_id
+        JOIN country AS co ON co.country_id = ci.country_id
+        ORDER BY c.customer_id
+        LIMIT :limit OFFSET :offset
+    """)
+    with db.engine.connect() as conn: #connecting to the db
+        total = conn.execute(count).scalar() #getting number of results
+        rows = conn.execute(sql, {"limit": page_size, "offset": (page - 1) * page_size}).mappings().all() #displaying a reasonable number of rows
+
+    return jsonify({ #JSON response for frontend to read
+        "total": total,
+        "totalPages": ceil(total/page_size), #need a whole number so use ceiling
+        "page": page,
+        "pageSize": page_size,
+        "items": [dict(r) for r in rows]
+    })
+
+if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True) #running and restarting the server if changes are made on port 127.0.0.1
