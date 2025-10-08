@@ -1,4 +1,4 @@
 activate and deactivate backend process:
 .\venv\Scripts\Activate
-python app.py
+python main.py
 deactivate

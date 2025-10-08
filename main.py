@@ -227,5 +227,5 @@ def customers_list(): #function for returning customers
         "items": [dict(r) for r in rows]
     })
 
-if __name__ == "__main__": #github frontend push syngergy (CSS added)
+if __name__ == "__main__": #github frontend push syngergy (CSS toggled off for more development)
     app.run(host="127.0.0.1", port=5000, debug=True) #running and restarting the server if changes are made on port 127.0.0.1
