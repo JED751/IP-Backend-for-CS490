@@ -167,7 +167,7 @@ def films_search(): #function for searching for a film
         sql_params["genre"] = f"%{genre}%" #parameter for SQL, partial matching allowed
 
     where_sql = "WHERE " + " AND ".join(where) if where else "" #combining all search features from user if present
-    count = text(f"SELECT COUNT(*) FROM film f {where_sql}") #amount of rows returned from search
+    count = text(f"SELECT COUNT(*) FROM film AS f {where_sql}") #amount of rows returned from search
 
     #query to get films with parameters from user, uses offset to show different pages of films
     film_sql = text(f"""
@@ -193,6 +193,7 @@ def films_search(): #function for searching for a film
     })
 
 #As a user I want to view a list of all customers (Pref. using pagination)
+#this one is no longer in use since below is the updated endpoint with search functionality
 @app.get("/api/customers") #endpoint for customer page
 def customers_list(): #function for returning customers
 
@@ -204,7 +205,7 @@ def customers_list(): #function for returning customers
 
     #customer information
     sql = text("""
-        SELECT c.customer_id, c.store_id, c.first_name, c.last_name, c.email, c.active, c.create_date, a.address, a.address2, a.district, ci.city, co.country,
+        SELECT c.customer_id, c.store_id, c.first_name, c.last_name, c.email, c.active, a.address, a.address2, a.district, ci.city, co.country,
         (SELECT COUNT(*) FROM rental AS r WHERE r.customer_id = c.customer_id) AS total_rentals,
         (SELECT COUNT(*) FROM rental AS r WHERE r.customer_id = c.customer_id AND r.return_date IS NULL) AS current_rentals,
         (SELECT MAX(rental_date) FROM rental AS r WHERE r.customer_id = c.customer_id) AS last_rental_date
@@ -227,5 +228,61 @@ def customers_list(): #function for returning customers
         "items": [dict(r) for r in rows]
     })
 
-if __name__ == "__main__": #github frontend push syngergy (CSS toggled off for more development)
+#As a user I want the ability to filter/search customers by their customer id, first name or last name.
+@app.get("/api/customers/search") #endpoint for searching for customers
+def customers_search(): #function for searching for customers
+
+    customer_id = request.args.get("customer_id", "", type = str).strip() #getting customer id from URL, blank if not found
+    first_name = request.args.get("first_name", "", type = str).strip() #getting first name from URL, blank if not found
+    last_name = request.args.get("last_name", "", type = str).strip() #getting last name from URL, blank if not found
+
+    #pagination
+    page = max(request.args.get("page", 1, type = int), 1) #ensuring page is not out of bounds
+    page_size = min(max(request.args.get("pageSize", 20, type = int), 1), 50) #20 customers at a time per page
+
+    where = [] #array of SQL conditions
+    sql_params = {} #used for parameters within SQL queries
+
+    if first_name: #if a first name is found
+        where.append("c.first_name LIKE :first")
+        sql_params["first"] = f"%{first_name}%" #parameter for SQL, partial matching allowed
+
+    if last_name: #if a last name is found
+        where.append("c.last_name LIKE :last")
+        sql_params["last"] = f"%{last_name}%" #parameter for SQL, partial matching allowed
+
+    if customer_id: #if a customer id is found
+        where.append("c.customer_id = :customer_id") #parameter for SQL, no partial matching allowed since this is an id
+        sql_params["customer_id"] = int(customer_id)
+
+    where_sql = "WHERE " + " AND ".join(where) if where else "" #combining all search features from user if present
+    count = text(f"SELECT COUNT(*) FROM customer AS c {where_sql}") #amount of rows returned from search
+
+    #query to get customers with parameters from user, uses offset to show different pages of customers
+    customer_sql = text(f"""
+        SELECT c.customer_id, c.store_id, c.first_name, c.last_name, c.email, c.active, a.address, a.address2, a.district, ci.city, co.country,
+        (SELECT COUNT(*) FROM rental AS r WHERE r.customer_id = c.customer_id) AS total_rentals,
+        (SELECT COUNT(*) FROM rental AS r WHERE r.customer_id = c.customer_id AND r.return_date IS NULL) AS current_rentals,
+        (SELECT MAX(rental_date) FROM rental AS r WHERE r.customer_id = c.customer_id) AS last_rental_date
+        FROM customer AS c
+        JOIN address AS a ON a.address_id = c.address_id
+        JOIN city AS ci ON ci.city_id = a.city_id
+        JOIN country AS co ON co.country_id = ci.country_id
+        {where_sql}
+        ORDER BY c.customer_id
+        LIMIT :limit OFFSET :offset
+    """)
+    with db.engine.connect() as conn: #connecting to the db
+        total = conn.execute(count, sql_params).scalar() #getting number of results
+        rows = conn.execute(customer_sql, {**sql_params, "limit": page_size, "offset": (page - 1) * page_size}).mappings().all() #displaying a reasonable number of rows
+    
+    return jsonify({ #JSON response for frontend to read
+        "total": total,
+        "totalPages": ceil(total/page_size), #need a whole number so use ceiling
+        "page": page,
+        "pageSize": page_size,
+        "items": [dict(r) for r in rows]
+    })
+
+if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True) #running and restarting the server if changes are made on port 127.0.0.1
