@@ -284,5 +284,46 @@ def customers_search(): #function for searching for customers
         "items": [dict(r) for r in rows]
     })
 
+#As a user I want to be able to view customer details and see their past and present rental history
+@app.get("/api/customers/<int:customer_id>")
+def customer_details(customer_id):
+
+    #query to get current customer's information
+    info_sql = text("""
+        SELECT c.customer_id, c.store_id, c.first_name, c.last_name, c.email, c.active, a.address, a.address2, a.district, ci.city, co.country, c.create_date
+        FROM customer AS c
+        JOIN address AS a ON a.address_id = c.address_id
+        JOIN city AS ci ON ci.city_id = a.city_id
+        JOIN country AS co ON co.country_id = ci.country_id
+        WHERE c.customer_id = :customer_id
+    """)
+    #query to get present rentals of current customer
+    present_sql = text("""
+        SELECT r.rental_id, r.inventory_id, r.rental_date, f.film_id, f.title, f.rental_duration, DATE_ADD(r.rental_date, INTERVAL f.rental_duration DAY) AS due_date
+        FROM rental AS r
+        JOIN inventory AS i ON i.inventory_id = r.inventory_id
+        JOIN film AS f ON f.film_id = i.film_id
+        WHERE r.customer_id = :customer_id AND r.return_date IS NULL
+        ORDER BY r.rental_date DESC
+    """)
+    #query to get past rentals of current customer
+    past_sql = text("""
+        SELECT r.rental_id, r.inventory_id, r.rental_date, r.return_date, f.film_id, f.title, TIMESTAMPDIFF(DAY, r.rental_date, r.return_date) AS days_out
+        FROM rental AS r
+        JOIN inventory AS i ON i.inventory_id = r.inventory_id
+        JOIN film AS f ON f.film_id = i.film_id
+        WHERE r.customer_id = :customer_id AND r.return_date IS NOT NULL
+        ORDER BY r.rental_date DESC
+        LIMIT 1000
+    """)
+    with db.engine.connect() as conn: #connecting to the db
+        info = conn.execute(info_sql, {"customer_id": customer_id}).mappings().first() #executing query with customer_id from URL as parameter
+        present = conn.execute(present_sql, {"customer_id": customer_id}).mappings().all() #executing query with customer_id from URL as parameter
+        past = conn.execute(past_sql, {"customer_id": customer_id}).mappings().all() #executing query with customer_id from URL as parameter
+    data = dict(info) #getting the rows and putting them into a dictionary
+    data["current_rentals"] = [dict(r) for r in present] #adding the current rentals to the dictionary
+    data["rental_history"] = [dict(r) for r in past] #adding the past rentals to the dictionary as well
+    return jsonify(data) #converting the data found into JSON format
+    
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True) #running and restarting the server if changes are made on port 127.0.0.1
