@@ -1,10 +1,11 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request #turns python objects into JSON for frontend, allows incoming http requests
 from flask_sqlalchemy import SQLAlchemy #lets use use the MySQL db
 from sqlalchemy import text #allows for SQL queries
 from flask_cors import CORS #lets us communicate with react
 from dotenv import load_dotenv, find_dotenv #for env file used to run backend
 import os #used to read env variables
 from math import ceil #math ceiling function
+from datetime import datetime #for rental and return dates
 
 load_dotenv(find_dotenv()) #connection to mySQL db in env
 
@@ -63,14 +64,16 @@ def top5_actors(): #function for getting the top 5 actors based on movie count
 @app.get("/api/films/<int:film_id>") #using the end of the URL as the film's ID
 def film_details(film_id): #function for getting a film's information
 
+    store_id = 1 #using only store with ID of 1 for simplicity sake
+
     sql = text("""
         -- getting film information
         SELECT f.film_id AS id, f.title, f.description, f.release_year, GROUP_CONCAT(DISTINCT c.name ORDER BY c.name SEPARATOR ', ') AS categories,
         l.name AS language, f.rental_duration, f.rental_rate, f.length AS duration, f.replacement_cost, f.rating, f.special_features, f.last_update,
-        (SELECT COUNT(*)
-        FROM rental AS r
-        JOIN inventory i ON i.inventory_id = r.inventory_id
-        WHERE i.film_id = f.film_id) AS rentals_count
+        (SELECT COUNT(*) FROM inventory AS i WHERE i.film_id = f.film_id AND i.store_id = :store_id) AS total_copies,
+        (SELECT COUNT(*) FROM inventory AS i LEFT JOIN rental AS r ON r.inventory_id = i.inventory_id AND r.return_date IS NULL
+        WHERE i.film_id = f.film_id AND i.store_id = :store_id AND r.rental_id IS NULL) AS available_copies,
+        (SELECT COUNT(*) FROM rental AS r JOIN inventory i2 ON i2.inventory_id = r.inventory_id WHERE i2.film_id = f.film_id) AS rentals_count
         FROM film AS f
         JOIN language AS l ON l.language_id = f.language_id
         LEFT JOIN film_category AS fc ON fc.film_id   = f.film_id
@@ -88,7 +91,7 @@ def film_details(film_id): #function for getting a film's information
         ORDER BY name;
     """)
     with db.engine.connect() as conn: #connecting to the db
-        film = conn.execute(sql, {"film_id": film_id}).mappings().first() #executing query with film_id from URL as parameter
+        film = conn.execute(sql, {"film_id": film_id, "store_id": store_id}).mappings().first() #executing query with film_id from URL as parameter, and store_id as 1 to avoid confusion
         actors = conn.execute(actors_sql, {"film_id": film_id}).mappings().all() #executing query with film_id from URL as parameter
     data = dict(film) #getting the rows and putting them into a dictionary
     data["actors"] = [dict(r) for r in actors] #adding the actors to the dictionary as well
@@ -286,7 +289,7 @@ def customers_search(): #function for searching for customers
 
 #As a user I want to be able to view customer details and see their past and present rental history
 @app.get("/api/customers/<int:customer_id>")
-def customer_details(customer_id):
+def customer_details(customer_id): #function for getting a customer's details
 
     #query to get current customer's information
     info_sql = text("""
@@ -324,6 +327,56 @@ def customer_details(customer_id):
     data["current_rentals"] = [dict(r) for r in present] #adding the current rentals to the dictionary
     data["rental_history"] = [dict(r) for r in past] #adding the past rentals to the dictionary as well
     return jsonify(data) #converting the data found into JSON format
-    
+
+#As a user I want to be able to rent a film out to a customer
+@app.post("/api/rentals")
+def rent_film(): #function for renting a film out to a customer
+    data = request.get_json() or {} #reading the incoming request as JSON, need to include empty JSON as other option to prevent crashes
+    customer_id = data.get("customer_id") #getting customer ID from user input, the customer that wants to rent the film
+    film_id = data.get("film_id") #getting the film that is being rented
+    staff_id = 1  #need a staff member for SQL insert query
+    store_id = 1  #need a store ID for SQL insert query
+
+    if not customer_id or not film_id:
+        return jsonify({"ok": False, "error": "customer_id and film_id are required."}), 400 #added an edge case if either customer or film ID are not found
+
+    with db.engine.begin() as conn: #connecting to the db, .begin() this time since it is a transactional SQL query
+        
+        #finding the customer, added an edge case if the customer is not active or not existent
+        customer = conn.execute(text("SELECT active FROM customer WHERE customer_id = :customer_id"), {"customer_id": customer_id}).scalar()
+        if customer is None:
+            return jsonify({"ok": False, "error": "Customer not found."}), 404 #no matching customer ID
+        if not customer:
+            return jsonify({"ok": False, "error": "Customer is inactive."}), 400 #customer is not active
+
+        #finding an available copy of the current film, meaning it has no active rental
+        inventory = conn.execute(text("""
+            SELECT i.inventory_id
+            FROM inventory AS i
+            LEFT JOIN rental AS r
+            ON i.inventory_id = r.inventory_id
+            AND r.return_date IS NULL
+            WHERE i.film_id = :fid
+            AND i.store_id = :sid
+            AND r.rental_id IS NULL
+            LIMIT 1
+        """), {"fid": film_id, "sid": store_id}).scalar()
+
+        if inventory is None:
+            return jsonify({"ok": False, "error": "No available copies for this film"}), 400 #if no copies of that film are left
+
+        #if everything is valid, let the customer rent the film
+        conn.execute(text("""
+            INSERT INTO rental (rental_date, inventory_id, customer_id, staff_id)
+            VALUES (:rental_date, :inventory, :customer_id, :staff_id)
+        """), {
+            "rental_date": datetime.utcnow(),
+            "inventory": inventory,
+            "customer_id": customer_id,
+            "staff_id": staff_id
+        })
+
+    return jsonify({"ok": True, "message": f"Film {film_id} rented to customer {customer_id}."}) #successful rental
+
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5000, debug=True) #running and restarting the server if changes are made on port 127.0.0.1
